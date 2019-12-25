@@ -11,21 +11,19 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
 
-type LoggerType string
-
 const (
-	GCP     LoggerType = "GCP"
-	CONSOLE            = "Console"
-	NONE               = "None"
+	GCP     = "GCP"
+	CONSOLE = "Console"
 )
 
 type Instance struct {
 	http.Server
-	loggerType    LoggerType
+	loggerType    string
 	appName       string
 	loggingClient *logging.Client
 }
@@ -34,14 +32,9 @@ var ContextKeyRequestID = "request_id"
 var LogFieldRequestID = "request_id"
 var LogFieldAppName = "app"
 
-var configLoggerType LoggerType = CONSOLE
-
-func SetLogger(loggerType LoggerType) {
-	configLoggerType = loggerType
-}
-
 func NewInstance(appName string, appVersion string, router http.Handler) *Instance {
 	port := getEnvOrDefault("PORT", "8080")
+	loggerType := getEnvOrDefault("LOGGER_TYPE", CONSOLE)
 	instance := Instance{
 		Server: http.Server{
 			Addr:           ":" + port,
@@ -50,12 +43,11 @@ func NewInstance(appName string, appVersion string, router http.Handler) *Instan
 			WriteTimeout:   20 * time.Second,
 			MaxHeaderBytes: 1 << 20,
 		},
-		loggerType: configLoggerType,
-		appName:    appName,
+		appName: appName,
 	}
 
 	projectID, ok := os.LookupEnv("PROJECT_ID")
-	if ok && configLoggerType == GCP {
+	if ok && loggerType == GCP {
 		// Use StackDriver logging
 		ctx := context.Background()
 		client, err := logging.NewClient(ctx, projectID)
@@ -63,8 +55,8 @@ func NewInstance(appName string, appVersion string, router http.Handler) *Instan
 			log.Fatalf("Failed to create client: %v", err)
 		}
 		instance.loggingClient = client
-		client.Logger(appName).StandardLogger(logging.Info).Printf("[GCP] %s [%s] version %s at %s", appName, projectID, appVersion, port)
-	} else if configLoggerType == CONSOLE {
+		client.Logger(strings.ReplaceAll(appName, " ", "")).StandardLogger(logging.Info).Printf("[GCP] %s [%s] version %s at %s", appName, projectID, appVersion, port)
+	} else {
 		logrus.WithField("app", appName).Infof("[Console] %s [%s] version %s at %s", appName, projectID, appVersion, port)
 	}
 
@@ -135,7 +127,7 @@ func (i *Instance) GetLoggerFromCtx(ctx context.Context) logrus.StdLogger {
 
 	if i.loggerType == GCP {
 		return i.loggingClient.Logger(i.appName).StandardLogger(logging.Info)
-	} else if configLoggerType == CONSOLE {
+	} else {
 		// OTHER Logger Types
 		return logrus.WithFields(logrus.Fields{LogFieldRequestID: requestID, LogFieldAppName: i.appName})
 	}
