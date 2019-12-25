@@ -6,17 +6,38 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/sirupsen/logrus"
 	"log"
 	"net/http"
 	"os"
-	"strings"
+	"os/signal"
+	"syscall"
 	"time"
+)
+
+type LoggerType string
+
+const (
+	GCP     LoggerType = "GCP"
+	CONSOLE            = "Console"
+	NONE               = "None"
 )
 
 type Instance struct {
 	http.Server
-	info  *log.Logger
-	error *log.Logger
+	loggerType    LoggerType
+	appName       string
+	loggingClient *logging.Client
+}
+
+var ContextKeyRequestID = "request_id"
+var LogFieldRequestID = "request_id"
+var LogFieldAppName = "app"
+
+var configLoggerType LoggerType = CONSOLE
+
+func SetLogger(loggerType LoggerType) {
+	configLoggerType = loggerType
 }
 
 func NewInstance(appName string, appVersion string, router http.Handler) *Instance {
@@ -25,38 +46,99 @@ func NewInstance(appName string, appVersion string, router http.Handler) *Instan
 		Server: http.Server{
 			Addr:           ":" + port,
 			Handler:        router,
-			ReadTimeout:    10 * time.Second,
-			WriteTimeout:   10 * time.Second,
+			ReadTimeout:    20 * time.Second,
+			WriteTimeout:   20 * time.Second,
 			MaxHeaderBytes: 1 << 20,
 		},
+		loggerType: configLoggerType,
+		appName:    appName,
 	}
 
-	ctx := context.Background()
 	projectID, ok := os.LookupEnv("PROJECT_ID")
-	if ok {
+	if ok && configLoggerType == GCP {
 		// Use StackDriver logging
+		ctx := context.Background()
 		client, err := logging.NewClient(ctx, projectID)
 		if err != nil {
 			log.Fatalf("Failed to create client: %v", err)
 		}
-
-		// Sets the name of the log to write to.
-		logName := strings.ReplaceAll(appName, " ", "")
-
-		instance.info = client.Logger(logName).StandardLogger(logging.Info)
-		instance.error = client.Logger(logName).StandardLogger(logging.Error)
-		instance.info.Printf("[Enabled Log][Starting...] %s [%s] version %s at %s", appName, projectID, appVersion, port)
+		instance.loggingClient = client
+		client.Logger(appName).StandardLogger(logging.Info).Printf("[GCP] %s [%s] version %s at %s", appName, projectID, appVersion, port)
+	} else if configLoggerType == CONSOLE {
+		logrus.WithField("app", appName).Infof("[Console] %s [%s] version %s at %s", appName, projectID, appVersion, port)
 	}
 
 	return &instance
 }
 
-func (i *Instance) Start() error {
-	err := i.ListenAndServe()
+func (i *Instance) Start() {
+
+	go func() {
+		err := i.ListenAndServe()
+		if err != http.ErrServerClosed {
+			log.Fatalf("[ERR] server exited with: %s", err)
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+
+	// pkill -15 main
+	signal.Notify(stop, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+
+	<-stop
+
+	log.Printf("Start shutting down server\n")
+	ctxShutDown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if i.loggingClient != nil {
+		err := i.loggingClient.Close()
+		if err != nil {
+			log.Printf("Failed to close logging client with error: %s", err)
+		} else {
+			log.Printf("Successfully closed logging client")
+		}
+	}
+	err := i.Shutdown(ctxShutDown)
 	if err != nil {
-		return fmt.Errorf("failed to ListenAndServe with reason: %w", err)
+		log.Panicf("Error shutting down server with error: %s", err)
+	}
+	log.Printf("Server exit properly\n")
+}
+
+func (i *Instance) GetFieldLoggerFromCtx(ctx context.Context) logrus.FieldLogger {
+	reqID := ctx.Value(ContextKeyRequestID)
+
+	var requestID string
+	if value, ok := reqID.(string); ok {
+		requestID = value
 	}
 
+	if requestID == "" {
+		requestID, _ = generateRequestID()
+	}
+
+	return logrus.WithFields(logrus.Fields{LogFieldRequestID: requestID, LogFieldAppName: i.appName})
+}
+
+func (i *Instance) GetLoggerFromCtx(ctx context.Context) logrus.StdLogger {
+	reqID := ctx.Value(ContextKeyRequestID)
+
+	var requestID string
+	if value, ok := reqID.(string); ok {
+		requestID = value
+	}
+
+	if requestID == "" {
+		requestID, _ = generateRequestID()
+	}
+
+	if i.loggerType == GCP {
+		return i.loggingClient.Logger(i.appName).StandardLogger(logging.Info)
+	} else if configLoggerType == CONSOLE {
+		// OTHER Logger Types
+		return logrus.WithFields(logrus.Fields{LogFieldRequestID: requestID, LogFieldAppName: i.appName})
+	}
 	return nil
 }
 
@@ -82,36 +164,6 @@ func generateRequestID() (string, error) {
 	}
 
 	return hex.EncodeToString(b), nil
-}
-
-func (i *Instance) InfoLog(r *http.Request, message string, format ...interface{}) {
-	ctxRequestID := r.Context().Value("request_id")
-	var requestID string
-	if ctxRequestID == nil {
-		requestID = ""
-	} else {
-		requestID = ctxRequestID.(string)
-	}
-	if i.info != nil {
-		i.info.Printf("[%s] %s\n", requestID, fmt.Sprintf(message, format...))
-	} else {
-		fmt.Printf("[%s] %s\n", requestID, fmt.Sprintf(message, format...))
-	}
-}
-
-func (i *Instance) ErrorLog(r *http.Request, message string, format ...interface{}) {
-	ctxRequestID := r.Context().Value("request_id")
-	var requestID string
-	if ctxRequestID == nil {
-		requestID = ""
-	} else {
-		requestID = ctxRequestID.(string)
-	}
-	if i.error != nil {
-		i.error.Printf("[%s] %s\n", requestID, fmt.Sprintf(message, format...))
-	} else {
-		log.Printf("[%s] %s\n", requestID, fmt.Sprintf(message, format...))
-	}
 }
 
 func AddRequestIDToContext(next http.HandlerFunc) http.HandlerFunc {
