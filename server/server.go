@@ -142,12 +142,6 @@ func getEnvOrDefault(key string, defaultValue string) string {
 	return value
 }
 
-type ReverseProxyConfig struct {
-	ProxyURL string
-	AuthURL  string
-	AuthPath string
-}
-
 func generateRequestID() (string, error) {
 	b := make([]byte, 8)
 	_, err := rand.Read(b)
