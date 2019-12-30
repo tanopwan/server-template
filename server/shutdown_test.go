@@ -30,7 +30,6 @@ func TestShutDownWithNormalHandler(t *testing.T) {
 func TestShutDownWithNormalHandlerAndLoggingClient(t *testing.T) {
 	t.Logf("Server starting")
 	os.Setenv("PROJECT_ID", "project_id")
-	server.SetLogger(server.GCP)
 	testServer := server.NewInstance("test-app", "1", nil)
 	http.HandleFunc("/delay", func(writer http.ResponseWriter, request *http.Request) {
 		writer.Write([]byte(`Hello`))
