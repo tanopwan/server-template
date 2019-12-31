@@ -63,8 +63,7 @@ func NewInstance(appName string, appVersion string, router http.Handler) *Instan
 	return &instance
 }
 
-func (i *Instance) Start() {
-
+func (i *Instance) Start() error {
 	go func() {
 		err := i.ListenAndServe()
 		if err != http.ErrServerClosed {
@@ -79,23 +78,24 @@ func (i *Instance) Start() {
 
 	<-stop
 
-	log.Printf("Start shutting down server\n")
+	fmt.Fprintf(os.Stdout, "Start shutting down server\n")
 	ctxShutDown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if i.loggingClient != nil {
 		err := i.loggingClient.Close()
 		if err != nil {
-			log.Printf("Failed to close logging client with error: %s", err)
+			fmt.Fprintf(os.Stderr, "Failed to close logging client with error: %+v\n", err)
 		} else {
-			log.Printf("Successfully closed logging client")
+			fmt.Fprintf(os.Stdout, "Successfully closed logging client\n")
 		}
 	}
 	err := i.Shutdown(ctxShutDown)
 	if err != nil {
-		log.Panicf("Error shutting down server with error: %s", err)
+		return err
 	}
-	log.Printf("Server exit properly\n")
+	fmt.Fprintf(os.Stdout, "Server exit properly\n")
+	return nil
 }
 
 func (i *Instance) GetFieldLoggerFromCtx(ctx context.Context) logrus.FieldLogger {
