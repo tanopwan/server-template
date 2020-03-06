@@ -3,19 +3,24 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/julienschmidt/httprouter"
-	"github.com/tanopwan/server-template/auth"
-	"github.com/tanopwan/server-template/server"
 	"io/ioutil"
 	"net/http"
 	"os"
+
+	"github.com/julienschmidt/httprouter"
+	"github.com/tanopwan/server-template/auth"
+	"github.com/tanopwan/server-template/server"
 )
 
 func run() error {
 	firebaseAuthService := auth.NewFirebaseAuthService()
 	router := httprouter.New()
 
-	srv := server.NewInstance("example-app", "1", router)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "Hello world")
+	})
+
+	srv := server.NewInstance("example-app", "1", handler)
 	router.HandlerFunc("POST", "/api/auth/firebase-auth/register", func(writer http.ResponseWriter, request *http.Request) {
 		logger := srv.GetFieldLoggerFromCtx(request.Context())
 		body, err := ioutil.ReadAll(request.Body)
@@ -56,7 +61,7 @@ func run() error {
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "%v", err)
+		fmt.Printf("%v", err)
 		os.Exit(1)
 	}
 }

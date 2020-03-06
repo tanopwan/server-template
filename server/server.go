@@ -1,19 +1,19 @@
 package server
 
 import (
-	"cloud.google.com/go/logging"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"github.com/sirupsen/logrus"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
+
+	"cloud.google.com/go/logging"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -26,6 +26,7 @@ type Instance struct {
 	loggerType    string
 	appName       string
 	loggingClient *logging.Client
+	hook          *GCPHook
 }
 
 var ContextKeyRequestID = "request_id"
@@ -48,18 +49,16 @@ func NewInstance(appName string, appVersion string, router http.Handler) *Instan
 
 	projectID, ok := os.LookupEnv("PROJECT_ID")
 	if ok && loggerType == GCP {
-		// Use StackDriver logging
-		ctx := context.Background()
-		client, err := logging.NewClient(ctx, projectID)
+		// Hooking StackDriver log
+		hook, err := NewGCPHook(context.Background(), projectID, appName)
 		if err != nil {
 			log.Fatalf("Failed to create client: %v", err)
 		}
-		instance.loggingClient = client
-		client.Logger(strings.ReplaceAll(appName, " ", "")).StandardLogger(logging.Info).Printf("[GCP] %s [%s] version %s at %s", appName, projectID, appVersion, port)
-	} else {
-		logrus.WithField("app", appName).Infof("[Console] %s [%s] version %s at %s", appName, projectID, appVersion, port)
+		logrus.SetFormatter(&logrus.JSONFormatter{})
+		logrus.AddHook(hook)
+		logrus.Info("Add hook to GCP")
 	}
-
+	logrus.Infof("%s [%s] version %s at %s", appName, projectID, appVersion, port)
 	return &instance
 }
 
@@ -78,23 +77,23 @@ func (i *Instance) Start() error {
 
 	<-stop
 
-	fmt.Fprintf(os.Stdout, "Start shutting down server\n")
+	logrus.Info("Start shutting down server")
 	ctxShutDown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if i.loggingClient != nil {
-		err := i.loggingClient.Close()
+	if i.hook != nil {
+		err := i.hook.Close()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to close logging client with error: %+v\n", err)
+			logrus.Errorf("Failed to close logging client with error: %+v", err)
 		} else {
-			fmt.Fprintf(os.Stdout, "Successfully closed logging client\n")
+			logrus.Info("Successfully closed logging client")
 		}
 	}
 	err := i.Shutdown(ctxShutDown)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stdout, "Server exit properly\n")
+	logrus.Info("Server exit properly")
 	return nil
 }
 
@@ -110,7 +109,7 @@ func (i *Instance) GetFieldLoggerFromCtx(ctx context.Context) logrus.FieldLogger
 		requestID, _ = generateRequestID()
 	}
 
-	return logrus.WithFields(logrus.Fields{LogFieldRequestID: requestID, LogFieldAppName: i.appName})
+	return logrus.WithFields(logrus.Fields{LogFieldRequestID: requestID})
 }
 
 func (i *Instance) GetLoggerFromCtx(ctx context.Context) logrus.StdLogger {
@@ -125,13 +124,7 @@ func (i *Instance) GetLoggerFromCtx(ctx context.Context) logrus.StdLogger {
 		requestID, _ = generateRequestID()
 	}
 
-	if i.loggerType == GCP {
-		return i.loggingClient.Logger(i.appName).StandardLogger(logging.Info)
-	} else {
-		// OTHER Logger Types
-		return logrus.WithFields(logrus.Fields{LogFieldRequestID: requestID, LogFieldAppName: i.appName})
-	}
-	return nil
+	return logrus.WithFields(logrus.Fields{LogFieldRequestID: requestID, LogFieldAppName: i.appName})
 }
 
 func getEnvOrDefault(key string, defaultValue string) string {
