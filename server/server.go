@@ -12,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"cloud.google.com/go/logging"
 	"github.com/sirupsen/logrus"
 )
 
@@ -23,10 +22,9 @@ const (
 
 type Instance struct {
 	http.Server
-	loggerType    string
-	appName       string
-	loggingClient *logging.Client
-	hook          *GCPHook
+	loggerType string
+	appName    string
+	hook       *GCPHook
 }
 
 var ContextKeyRequestID = "request_id"
