@@ -45,6 +45,7 @@ func NewInstance(appName string, appVersion string, router http.Handler) *Instan
 		appName: appName,
 	}
 
+	logrus.SetFormatter(&logrus.JSONFormatter{})
 	projectID, ok := os.LookupEnv("PROJECT_ID")
 	if ok && loggerType == GCP {
 		// Hooking StackDriver log
@@ -52,7 +53,6 @@ func NewInstance(appName string, appVersion string, router http.Handler) *Instan
 		if err != nil {
 			log.Fatalf("Failed to create client: %v", err)
 		}
-		logrus.SetFormatter(&logrus.JSONFormatter{})
 		logrus.AddHook(hook)
 		logrus.Info("Add hook to GCP")
 	}
